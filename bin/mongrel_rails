@@ -124,7 +124,7 @@ module Mongrel
             run_config(defaults[:config_script])
           end
 
-          setup_rails_signals
+          setup_signals
         end
       end
 

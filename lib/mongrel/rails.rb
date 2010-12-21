@@ -38,7 +38,6 @@ module Mongrel
         @app = Rack::Chunked.new(Rack::ContentLength.new(rails_app))
 
         @files = Mongrel::DirHandler.new(dir,false)
-        @guard = Mutex.new
 
         # Register the requested MIME types
         mime_map.each {|k,v| Mongrel::DirHandler::add_mime_type(k,v) }
@@ -110,19 +109,6 @@ module Mongrel
           end
         end
       end
-
-      # Does the internal reload for Rails.  It might work for most cases, but
-      # sometimes you get exceptions.  In that case just do a real restart.
-      def reload!
-        begin
-          @guard.synchronize {
-            $".replace $orig_dollar_quote
-            GC.start
-            Dispatcher.reset_application!
-            ActionController::Routing::Routes.reload
-          }
-        end
-      end
     end
 
     # Creates Rails specific configuration options for people to use 
@@ -164,7 +150,6 @@ module Mongrel
         ops[:docroot] ||= "public"
         ops[:mime] ||= {}
 
-        $orig_dollar_quote = $".clone
         ENV['RAILS_ENV'] = ops[:environment]
         env_location = "#{ops[:cwd]}/config/environment"
         require env_location
@@ -173,34 +158,6 @@ module Mongrel
 #        ActionController::AbstractRequest.relative_url_root = ops[:prefix] if ops[:prefix]
 
         @rails_handler = RailsHandler.new(ops[:docroot], ops[:mime])
-      end
-
-      # Reloads Rails.  This isn't too reliable really, but it
-      # should work for most minimal reload purposes.  The only reliable
-      # way to reload properly is to stop and then start the process.
-      def reload!
-        if not @rails_handler
-          raise "Rails was not configured.  Read the docs for RailsConfigurator."
-        end
-
-        log "Reloading Rails..."
-        @rails_handler.reload!
-        log "Done reloading Rails."
-
-      end
-
-      # Takes the exact same configuration as Mongrel::Configurator (and actually calls that)
-      # but sets up the additional HUP handler to call reload!.
-      def setup_rails_signals(options={})
-        ops = resolve_defaults(options)
-        setup_signals(options)
-
-        unless RbConfig::CONFIG['host_os'] =~ /mingw|mswin/
-          # rails reload
-          trap("HUP") { log "HUP signal received."; reload!          }
-
-          log "Rails signals registered.  HUP => reload (without restart).  It might not work well."
-        end
       end
     end
   end
