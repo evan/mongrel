@@ -5,7 +5,6 @@
 # for more information.
 
 require 'mongrel'
-require 'cgi'
 
 
 module Mongrel
@@ -35,6 +34,9 @@ module Mongrel
       @@file_only_methods = ["GET","HEAD"]
 
       def initialize(dir, mime_map = {})
+        rails_app = Rails.respond_to?(:application) ? ::Rails.application : ActionController::Dispatcher.new
+        @app = Rack::Chunked.new(Rack::ContentLength.new(rails_app))
+
         @files = Mongrel::DirHandler.new(dir,false)
         @guard = Mutex.new
 
@@ -65,25 +67,46 @@ module Mongrel
           request.params[Mongrel::Const::PATH_INFO] = page_cached
           @files.process(request,response)
         else
+          env = {}.replace(request.params)
+          env.delete "HTTP_CONTENT_TYPE"
+          env.delete "HTTP_CONTENT_LENGTH"
+
+          env["SCRIPT_NAME"] = ""  if env["SCRIPT_NAME"] == "/"
+
+          rack_input = request.body || StringIO.new('')
+          rack_input.set_encoding(Encoding::BINARY) if rack_input.respond_to?(:set_encoding)
+
+          env.update({"rack.version" => Rack::VERSION,
+                       "rack.input" => rack_input,
+                       "rack.errors" => $stderr,
+
+                       "rack.multithread" => true,
+                       "rack.multiprocess" => false, # ???
+                       "rack.run_once" => false,
+
+                       "rack.url_scheme" => "http",
+                     })
+          env["QUERY_STRING"] ||= ""
+
+          status, headers, body = @app.call(env)
+
           begin
-            cgi = Mongrel::CGIWrapper.new(request, response)
-            cgi.handler = self
-            # We don't want the output to be really final until we're out of the lock
-            cgi.default_really_final = false
+            response.status = status.to_i
+            response.send_status(nil)
 
-            @guard.synchronize {
-              @active_request_path = request.params[Mongrel::Const::PATH_INFO] 
-              Dispatcher.dispatch(cgi, ActionController::CgiRequest::DEFAULT_SESSION_OPTIONS, response.body)
-              @active_request_path = nil
+            headers.each { |k, vs|
+              vs.split("\n").each { |v|
+                response.header[k] = v
+              }
             }
+            response.send_header
 
-            # This finalizes the output using the proper HttpResponse way
-            cgi.out("text/html",true) {""}
-          rescue Errno::EPIPE
-            response.socket.close
-          rescue Object => rails_error
-            STDERR.puts "#{Time.now}: Error calling Dispatcher.dispatch #{rails_error.inspect}"
-            STDERR.puts rails_error.backtrace.join("\n")
+            body.each { |part|
+              response.write part
+              response.socket.flush
+            }
+          ensure
+            body.close  if body.respond_to? :close
           end
         end
       end
@@ -145,10 +168,9 @@ module Mongrel
         ENV['RAILS_ENV'] = ops[:environment]
         env_location = "#{ops[:cwd]}/config/environment"
         require env_location
-        require 'dispatcher'
-        require 'mongrel/rails'
 
-        ActionController::AbstractRequest.relative_url_root = ops[:prefix] if ops[:prefix]
+# TODO: Is there some Rails 3 equivalent
+#        ActionController::AbstractRequest.relative_url_root = ops[:prefix] if ops[:prefix]
 
         @rails_handler = RailsHandler.new(ops[:docroot], ops[:mime])
       end
