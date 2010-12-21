@@ -23,7 +23,7 @@ module Mongrel
     #
     # * If the requested exact PATH_INFO exists as a file then serve it.
     # * If it exists at PATH_INFO+".html" exists then serve that.
-    # * Finally, construct a Mongrel::CGIWrapper and run Dispatcher.dispatch to have Rails go.
+    # * Finally, run the Rails application Rack handler.
     #
     # This means that if you are using page caching it will actually work with Mongrel
     # and you should see a decent speed boost (but not as fast as if you use a static
