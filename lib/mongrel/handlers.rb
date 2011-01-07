@@ -351,7 +351,7 @@ module Mongrel
 
     def process(request, response)
       if rand(@sample_rate)+1 == @sample_rate
-        @processors.sample(listener.workers.list.length)
+        @processors.sample(listener.workers.length)
         @headcount.sample(request.params.length)
         @reqsize.sample(request.body.length / 1024.0)
         @respsize.sample((response.body.length + response.header.out.length) / 1024.0)
