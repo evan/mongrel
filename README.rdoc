@@ -4,6 +4,10 @@
 * http://rubyforge.org/projects/mongrel
 * http://github.com/luislavena/mongrel
 
+== DEPRECATED
+
+Please use Unicorn[http://unicorn.bogomips.org/] instead.
+
 == Description
 
 Mongrel is a small library that provides a very fast HTTP 1.1 server for Ruby web applications.  It is not particular to any framework, and is intended to be just enough to get a web application running behind a more complete and robust web server.
@@ -29,7 +33,7 @@ Now you should have the mongrel_rails command available in your PATH, so just do
 
 This will start it in the foreground so you can play with it.  It runs your application in production mode.  To get help do:
 
- $ mongrel_rails start -h 
+ $ mongrel_rails start -h
 
 Finally, you can then start in background mode:
 
