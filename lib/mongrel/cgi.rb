@@ -105,7 +105,7 @@ module Mongrel
         when Hash
           cookie.each_value {|c| to['Set-Cookie'] = c.to_s}
         else
-          to['Set-Cookie'] = head['cookie'].to_s
+          to['Set-Cookie'] = @head['cookie'].to_s
         end
         
         @head.delete('cookie')
