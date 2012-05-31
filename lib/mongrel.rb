@@ -72,7 +72,6 @@ module Mongrel
   # hold your breath until Ruby 1.9 is actually finally useful.
   class HttpServer
     attr_reader :acceptor
-    attr_reader :workers
     attr_reader :classifier
     attr_reader :host
     attr_reader :port
@@ -101,7 +100,7 @@ module Mongrel
       @classifier = URIClassifier.new
       @host = host
       @port = port
-      @workers = ThreadGroup.new
+      @workers = []
       @throttle = throttle / 100.0
       @num_processors = num_processors
       @timeout = timeout
@@ -215,11 +214,11 @@ module Mongrel
     # currently servicing.  It returns the count of workers still active
     # after the reap is done.  It only runs if there are workers to reap.
     def reap_dead_workers(reason='unknown')
-      if @workers.list.length > 0
-        STDERR.puts "#{Time.now}: Reaping #{@workers.list.length} threads for slow workers because of '#{reason}'"
+      if workers.length > 0
+        STDERR.puts "#{Time.now}: Reaping #{workers.length} threads for slow workers because of '#{reason}'"
         error_msg = "Mongrel timed out this thread: #{reason}"
         mark = Time.now
-        @workers.list.each do |worker|
+        workers.each do |worker|
           worker[:started_on] = Time.now if not worker[:started_on]
 
           if mark - worker[:started_on] > @timeout + @throttle
@@ -229,7 +228,7 @@ module Mongrel
         end
       end
 
-      return @workers.list.length
+      return workers.length
     end
 
     # Performs a wait on all the currently running threads and kills any that take
@@ -238,7 +237,7 @@ module Mongrel
     # that much longer.
     def graceful_shutdown
       while reap_dead_workers("shutdown") > 0
-        STDERR.puts "Waiting for #{@workers.list.length} requests to finish, could take #{@timeout + @throttle} seconds."
+        STDERR.puts "Waiting for #{workers.length} requests to finish, could take #{@timeout + @throttle} seconds."
         sleep @timeout / 10
       end
     end
@@ -280,17 +279,15 @@ module Mongrel
               if defined?($tcp_cork_opts) and $tcp_cork_opts
                 client.setsockopt(*$tcp_cork_opts) rescue nil
               end
-  
-              worker_list = @workers.list
-  
-              if worker_list.length >= @num_processors
-                STDERR.puts "Server overloaded with #{worker_list.length} processors (#@num_processors max). Dropping connection."
+
+              if workers.length >= @num_processors
+                STDERR.puts "Server overloaded with #{workers.length} processors (#@num_processors max). Dropping connection."
                 client.close rescue nil
                 reap_dead_workers("max processors")
               else
                 thread = Thread.new(client) {|c| process_client(c) }
                 thread[:started_on] = Time.now
-                @workers.add(thread)
+                @workers << thread
   
                 sleep @throttle if @throttle > 0
               end
@@ -354,6 +351,11 @@ module Mongrel
       if synchronous
         sleep(0.5) while @acceptor.alive?
       end
+    end
+
+    def workers
+      @workers.delete_if { |th| !th.alive? }
+      @workers
     end
 
   end

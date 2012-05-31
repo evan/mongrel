@@ -17,6 +17,16 @@ class TestHandler < Mongrel::HttpHandler
   end
 end
 
+class ThreadSpawnHandler < Mongrel::HttpHandler
+  attr_reader :ran_test
+
+  def process(request, response)
+    20.times { Thread.new{ sleep 5 } }
+    @ran_test = true
+    response.socket.write("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n\r\nhello!\n")
+  end
+end
+
 
 class WebServerTest < Test::Unit::TestCase
 
@@ -29,7 +39,9 @@ class WebServerTest < Test::Unit::TestCase
     end
     
     @tester = TestHandler.new
+    @threads = ThreadSpawnHandler.new
     @server.register("/test", @tester)
+    @server.register("/threads", @threads)
     redirect_test_io do
       @server.run 
     end
@@ -101,6 +113,16 @@ class WebServerTest < Test::Unit::TestCase
         ]
 
         tests.each {|t| t.join}
+      end
+    end
+  end
+
+  def test_thread_spawn
+    thread_spawn_request = "GET /threads HTTP/1.1\r\nHost: www.zedshaw.com\r\nContent-Type: text/plain\r\n\r\n"
+    redirect_test_io do
+      assert_nothing_raised do
+        do_test(thread_spawn_request, 1)
+        do_test(thread_spawn_request, 1)
       end
     end
   end
