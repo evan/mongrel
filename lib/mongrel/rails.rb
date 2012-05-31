@@ -5,7 +5,6 @@
 # for more information.
 
 require 'mongrel'
-require 'cgi'
 
 
 module Mongrel
@@ -24,7 +23,7 @@ module Mongrel
     #
     # * If the requested exact PATH_INFO exists as a file then serve it.
     # * If it exists at PATH_INFO+".html" exists then serve that.
-    # * Finally, construct a Mongrel::CGIWrapper and run Dispatcher.dispatch to have Rails go.
+    # * Finally, run the Rails application Rack handler.
     #
     # This means that if you are using page caching it will actually work with Mongrel
     # and you should see a decent speed boost (but not as fast as if you use a static
@@ -35,8 +34,10 @@ module Mongrel
       @@file_only_methods = ["GET","HEAD"]
 
       def initialize(dir, mime_map = {})
+        rails_app = Rails.respond_to?(:application) ? ::Rails.application : ActionController::Dispatcher.new
+        @app = Rack::Chunked.new(Rack::ContentLength.new(rails_app))
+
         @files = Mongrel::DirHandler.new(dir,false)
-        @guard = Mutex.new
 
         # Register the requested MIME types
         mime_map.each {|k,v| Mongrel::DirHandler::add_mime_type(k,v) }
@@ -65,39 +66,47 @@ module Mongrel
           request.params[Mongrel::Const::PATH_INFO] = page_cached
           @files.process(request,response)
         else
+          env = {}.replace(request.params)
+          env.delete "HTTP_CONTENT_TYPE"
+          env.delete "HTTP_CONTENT_LENGTH"
+
+          env["SCRIPT_NAME"] = ""  if env["SCRIPT_NAME"] == "/"
+
+          rack_input = request.body || StringIO.new('')
+          rack_input.set_encoding(Encoding::BINARY) if rack_input.respond_to?(:set_encoding)
+
+          env.update({"rack.version" => Rack::VERSION,
+                       "rack.input" => rack_input,
+                       "rack.errors" => $stderr,
+
+                       "rack.multithread" => true,
+                       "rack.multiprocess" => false, # ???
+                       "rack.run_once" => false,
+
+                       "rack.url_scheme" => "http",
+                     })
+          env["QUERY_STRING"] ||= ""
+
+          status, headers, body = @app.call(env)
+
           begin
-            cgi = Mongrel::CGIWrapper.new(request, response)
-            cgi.handler = self
-            # We don't want the output to be really final until we're out of the lock
-            cgi.default_really_final = false
+            response.status = status.to_i
+            response.send_status(nil)
 
-            @guard.synchronize {
-              @active_request_path = request.params[Mongrel::Const::PATH_INFO] 
-              Dispatcher.dispatch(cgi, ActionController::CgiRequest::DEFAULT_SESSION_OPTIONS, response.body)
-              @active_request_path = nil
+            headers.each { |k, vs|
+              vs.split("\n").each { |v|
+                response.header[k] = v
+              }
             }
+            response.send_header
 
-            # This finalizes the output using the proper HttpResponse way
-            cgi.out("text/html",true) {""}
-          rescue Errno::EPIPE
-            response.socket.close
-          rescue Object => rails_error
-            STDERR.puts "#{Time.now}: Error calling Dispatcher.dispatch #{rails_error.inspect}"
-            STDERR.puts rails_error.backtrace.join("\n")
+            body.each { |part|
+              response.write part
+              response.socket.flush
+            }
+          ensure
+            body.close  if body.respond_to? :close
           end
-        end
-      end
-
-      # Does the internal reload for Rails.  It might work for most cases, but
-      # sometimes you get exceptions.  In that case just do a real restart.
-      def reload!
-        begin
-          @guard.synchronize {
-            $".replace $orig_dollar_quote
-            GC.start
-            Dispatcher.reset_application!
-            ActionController::Routing::Routes.reload
-          }
         end
       end
     end
@@ -141,44 +150,14 @@ module Mongrel
         ops[:docroot] ||= "public"
         ops[:mime] ||= {}
 
-        $orig_dollar_quote = $".clone
         ENV['RAILS_ENV'] = ops[:environment]
         env_location = "#{ops[:cwd]}/config/environment"
         require env_location
-        require 'dispatcher'
-        require 'mongrel/rails'
 
-        ActionController::AbstractRequest.relative_url_root = ops[:prefix] if ops[:prefix]
+# TODO: Is there some Rails 3 equivalent
+#        ActionController::AbstractRequest.relative_url_root = ops[:prefix] if ops[:prefix]
 
         @rails_handler = RailsHandler.new(ops[:docroot], ops[:mime])
-      end
-
-      # Reloads Rails.  This isn't too reliable really, but it
-      # should work for most minimal reload purposes.  The only reliable
-      # way to reload properly is to stop and then start the process.
-      def reload!
-        if not @rails_handler
-          raise "Rails was not configured.  Read the docs for RailsConfigurator."
-        end
-
-        log "Reloading Rails..."
-        @rails_handler.reload!
-        log "Done reloading Rails."
-
-      end
-
-      # Takes the exact same configuration as Mongrel::Configurator (and actually calls that)
-      # but sets up the additional HUP handler to call reload!.
-      def setup_rails_signals(options={})
-        ops = resolve_defaults(options)
-        setup_signals(options)
-
-        unless RbConfig::CONFIG['host_os'] =~ /mingw|mswin/
-          # rails reload
-          trap("HUP") { log "HUP signal received."; reload!          }
-
-          log "Rails signals registered.  HUP => reload (without restart).  It might not work well."
-        end
       end
     end
   end
